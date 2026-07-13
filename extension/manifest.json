@@ -1,0 +1,22 @@
+{
+    "manifest_version": 3,
+    "name": "AutoNILAM Core Browser Helper",
+    "version": "1.0.0",
+    "description": "Bridges internal dashboard datasets safely to the KPM AINS reading log form systems.",
+    "permissions": [
+        "activeTab",
+        "storage"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "http://localhost:*/*",
+                "https://ains.moe.gov.my/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_end"
+        }
+    ]
+}

@@ -10,21 +10,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="AutoNILAM Core Engine API")
+app = FastAPI(title="AutoNILAM Production Core Engine API")
 
-client = genai.Client()
-
-# Configure CORS cross-origin allowances for Flutter Web environments
+# UPDATED: Relaxed CORS requirements to accept requests incoming from the live Flutter Web client
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production deployment, pin strictly to your Flutter domain URL
+    allow_origins=["*"], 
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Initialize the 2026 Google GenAI Production client SDK instance 
-# The SDK natively checks for the GEMINI_API_KEY environment variable.
 client = genai.Client()
 
 class NilamAnalysisResponse(BaseModel):
@@ -35,16 +31,13 @@ class NilamAnalysisResponse(BaseModel):
     ulasan: str
 
 def extract_strategic_chunks(file_path: str) -> str:
-    """Extracts first and middle pages to slash API token expenses by 90%."""
     reader = PdfReader(file_path)
     total_pages = len(reader)
     combined_text = ""
     
-    # Grab introductory structural sections (Metadata, Preface)
     for i in range(min(3, total_pages)):
         combined_text += reader.pages[i].extract_text() or ""
         
-    # Grab contextual core plot points from middle quadrants
     if total_pages > 6:
         midpoint = total_pages // 2
         combined_text += reader.pages[midpoint].extract_text() or ""
@@ -54,32 +47,64 @@ def extract_strategic_chunks(file_path: str) -> str:
 
 @app.post("/api/v1/analyze", response_model=NilamAnalysisResponse)
 async def process_document_upload(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only standard PDF documents are supported.")
+    filename_lower = file.filename.lower()
+    content_type = file.content_type.lower() if file.content_type else ""
+    
+    # 1. Advanced check: Verify by extension OR browser MIME type
+    is_pdf = filename_lower.endswith('.pdf') or content_type == 'application/pdf'
+    
+    is_image = (
+        filename_lower.endswith(('.jpg', '.jpeg', '.png', '.webp', '.jfif')) or 
+        content_type.startswith('image/')
+    )
+    
+    # If it fails both, print to Render logs for debugging and reject
+    if not is_pdf and not is_image:
+        print(f"Rejected File: Name='{file.filename}', MIME='{file.content_type}'")
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported format. Got file type profile: MIME={file.content_type}"
+        )
         
     temporary_location = f"cache_{file.filename}"
+    file_bytes = await file.read()
     
-    # Stream binary payload from RAM onto disk space safely
     with open(temporary_location, "wb") as buffer:
-        buffer.write(await file.read())
+        buffer.write(file_bytes)
         
     try:
-        raw_text_payload = extract_strategic_chunks(temporary_location)
-        
         system_execution_prompt = """
         You are an expert Malaysian School Resource Center (Guru Media/PSS) coordinator. 
-        Analyze the provided book text extract and perform two tasks:
-        1. Extract the Title, Author name, and Publisher.
-        2. Write a highly compliant reading summary ('ulasan') tailored for a primary/secondary school NILAM entry.
+        Analyze the provided book file attachment asset (which may appear as an extracted text stream or a direct graphical page illustration/cover).
         
-        The 'ulasan' must be written in clear, natural Bahasa Melayu, span exactly 3 to 4 sentences, 
-        and explicitly outline the core story theme along with a positive moral value ('nilai murni').
+        Perform two primary tasks:
+        1. Extract the Title, Author name, and Publisher. If the author or publisher details are missing from the page visual layouts, infer them logically or input 'Tidak Dinyatakan'.
+        - Set 'isFiction' to true if it is a storybook or novel, and false if it is a textbook, factual, or reference book.
+        2. Synthesize a pristine, compliant reading review report summary ('ulasan') tailored for a Malaysian school NILAM entry log.
+        
+        The 'ulasan' MUST meet these exact specifications:
+        - Written in natural, standard Bahasa Melayu.
+        - Span exactly 3 to 4 complete sentences.
+        - Clearly state the overarching theme/plot along with a constructive moral lesson value ('nilai murni').
         """
         
-        # Dispatch structured query request to Gemini-2.5-Flash
+        contents_payload = [system_execution_prompt]
+        
+        if is_pdf:
+            raw_text = extract_strategic_chunks(temporary_location)
+            contents_payload.append(raw_text)
+        else:
+            # Dynamically determine valid web image MIME type mappings
+            target_mime = content_type if content_type.startswith('image/') else "image/jpeg"
+            image_part = types.Part.from_bytes(
+                data=file_bytes,
+                mime_type=target_mime,
+            )
+            contents_payload.append(image_part)
+            
         ai_response = client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=[system_execution_prompt, raw_text_payload],
+            contents=contents_payload,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=types.Schema(
@@ -96,13 +121,11 @@ async def process_document_upload(file: UploadFile = File(...)):
             ),
         )
         
-        # Pass native JSON structures safely back to client request handlers
         return json.loads(ai_response.text)
         
     except Exception as server_error:
         raise HTTPException(status_code=500, detail=str(server_error))
         
     finally:
-        # Prevent localized environment pollution by forcing immediate disk cleanup routines
         if os.path.exists(temporary_location):
             os.remove(temporary_location)

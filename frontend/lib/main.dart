@@ -82,7 +82,7 @@ class _AutoNilamDashboardState extends State<AutoNilamDashboard> {
       ),
       body: Center(
         child: Container(
-          maxWidth: 600,
+          width: 600,
           margin: const EdgeInsets.all(24),
           padding: const EdgeInsets.all(32),
           decoration: BoxDecoration(
